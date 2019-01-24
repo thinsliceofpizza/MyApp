@@ -1,0 +1,262 @@
+package com.hsrw.messenger;
+
+
+import android.os.Handler;
+import android.os.Message;
+import android.support.v7.app.AppCompatActivity;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
+import com.rabbitmq.client.*;
+
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.concurrent.BlockingDeque;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.TimeoutException;
+
+public class MainActivity extends AppCompatActivity {
+    private final static String QUEUE_NAME = "library";
+    private final static String QUEUE_NAME1 = "fablab";
+    private final static String QUEUE_NAME2 = "mensa";
+
+    private Thread subscribeThread;
+    private Thread publishThread;
+    private ConnectionFactory factory = new ConnectionFactory();
+
+    private Channel channel;
+    private AMQP.Queue.DeclareOk q;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        setupConnectionFactory();
+        publishToAMQP();
+        setupPubButton();
+
+
+        final Handler incomingMessageHandler = new Handler() {
+            @Override
+            public void handleMessage(Message msg) {
+                String message = msg.getData().getString("msg");
+                TextView tv = (TextView) findViewById(R.id.messages_received);
+                Date now = new Date();
+                SimpleDateFormat ft = new SimpleDateFormat ("hh:mm:ss");
+                tv.append(ft.format(now) + ' ' + message + '\n');
+            }
+        };
+        subscribe(incomingMessageHandler);
+    }
+
+    void setupPubButton() {
+        Button button = (Button) findViewById(R.id.publish_button);
+        Button button1 = (Button) findViewById(R.id.publish_button2);
+        Button button2 = (Button) findViewById(R.id.publish_button3);
+
+        button.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View arg0) {
+                EditText et = (EditText) findViewById(R.id.message_to_publish);
+                publishMessage(et.getText().toString());
+                et.setText("");
+            }
+        });
+        button1.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View arg0) {
+                EditText ett = (EditText) findViewById(R.id.message_to_publish);
+                publishMessage(ett.getText().toString());
+                ett.setText("");
+            }
+        });
+        button2.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View arg0) {
+                EditText ettt = (EditText) findViewById(R.id.message_to_publish);
+                publishMessage(ettt.getText().toString());
+                ettt.setText("");
+            }
+        });
+
+
+
+    }
+
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        publishThread.interrupt();
+        subscribeThread.interrupt();
+    }
+
+    private BlockingDeque<String> queue = new LinkedBlockingDeque<String>();
+    void publishMessage(String message) {
+        //Adds a message to internal blocking queue
+        try {
+            Log.d("","[q] " + message);
+            queue.putLast(message);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    private void setupConnectionFactory() {
+        factory.setAutomaticRecoveryEnabled(false);
+        factory.setUsername("steve");
+        factory.setPassword("steve");
+        factory.setHost("192.168.1.106");
+        factory.setPort(5672);
+    }
+
+    void subscribe(final Handler handler)
+    {
+        subscribeThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+
+                try {
+
+                Connection connection = factory.newConnection();
+                channel = connection.createChannel();
+                channel.basicQos(3);
+
+                // work here
+                //    Channel channel1 = connection.createChannel();
+                //   channel1.basicQos(2);
+
+                //   Channel channel2 = connection.createChannel();
+                //   channel2.basicQos(3);
+
+                channel.exchangeDeclare(QUEUE_NAME1, "direct");
+                String queueName = channel.queueDeclare().getQueue();
+                channel.queueBind(queueName, "amq.direct", "redd");
+
+                channel.exchangeDeclare(QUEUE_NAME2, "topic");
+                String queueName1 = channel.queueDeclare().getQueue();
+                channel.queueBind(queueName1, "amq.topic", "blue");
+
+                 q = channel.queueDeclare(QUEUE_NAME, false, false, false, null);
+                channel.queueBind(q.getQueue(), "amq.fanout", "chat");
+
+                // work here
+
+                // AMQP.Queue.DeclareOk p = channel1.queueDeclare(QUEUE_NAME1, false, false, false, null);
+                //  channel1.queueBind(p.getQueue(), "direct", "red");
+
+                //  AMQP.Queue.DeclareOk r = channel2.queueDeclare(QUEUE_NAME2, false, false, false, null);
+                //  channel2.queueBind(r.getQueue(), "topic", "blue");
+
+                // DefaultConsumer consumer1 = new DefaultConsumer(channel1);
+
+                // DefaultConsumer consumer2 = new DefaultConsumer(channel2);
+
+                }catch(IOException ioe){}
+                catch (TimeoutException toe){}
+
+
+                while(true) {
+                    try {
+
+
+                        DefaultConsumer consumer = new DefaultConsumer(channel)
+                        {
+
+                            @Override
+                            public void handleDelivery(String consumerTag,
+                                                       Envelope envelope, AMQP.BasicProperties properties,
+                                                       byte[] body) throws IOException {
+                                String message = new String(body);
+                                Log.d("","[r] " + message);
+
+                                Message msg = handler.obtainMessage();
+                                Bundle bundle = new Bundle();
+
+                                bundle.putString("msg", message);
+                                msg.setData(bundle);
+                                handler.sendMessage(msg);
+                            }
+                        };
+                        // Work here
+
+                        channel.basicConsume(q.getQueue(), true, consumer);
+                        // channel1.basicConsume(p.getQueue(), true, consumer1);
+                        //   channel2.basicConsume(r.getQueue(), true, consumer2);
+
+                    } catch (Exception e1) {
+                        Log.d("", "Connection broken: " + e1.getClass().getName());
+                        try {
+                            Thread.sleep(4000); //sleep and then try again
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        subscribeThread.start();
+    }
+
+    public void publishToAMQP()
+    {
+        publishThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while(true) {
+                    try {
+                        Connection connection = factory.newConnection();
+                        Channel ch = connection.createChannel();
+                        ch.confirmSelect();
+
+                        // work here
+                        // Connection connection1 = factory.newConnection();
+                        //  Channel chh = connection.createChannel();
+                        //  chh.confirmSelect();
+
+                        //  Connection connection2 = factory.newConnection();
+                        //  Channel chhh = connection.createChannel();
+                        //  chhh.confirmSelect();
+
+                        while (true) {
+                            String message = queue.takeFirst();
+                            try{
+                                ch.basicPublish("amq.fanout", "chat", null, message.getBytes());
+
+                                ch.basicPublish("amq.direct", "red", null,message.getBytes());
+                                ch.basicPublish("amq.topic", "blue", null,message.getBytes());
+
+                                Log.d("", "[s] " + message);
+                                ch.waitForConfirmsOrDie();
+                                // work here
+
+                                //  chh.waitForConfirmsOrDie();
+                                //   chhh.waitForConfirmsOrDie();
+                            } catch (Exception e){
+                                Log.d("","[f] " + message);
+                                queue.putFirst(message);
+                                throw e;
+                            }
+                        }
+                    } catch (InterruptedException e) {
+                        break;
+                    } catch (Exception e) {
+                        Log.d("", "Connection broken: " + e.getClass().getName());
+                        try {
+                            Thread.sleep(5000); //sleep and then try again
+                        } catch (InterruptedException e1) {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        publishThread.start();
+    }
+}
